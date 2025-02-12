@@ -1,3 +1,5 @@
+import dotenv from "dotenv";
+dotenv.config();
 import axios from "axios";
 import chalk from "chalk";
 import logSymbols from "log-symbols";
@@ -81,16 +83,15 @@ async function fetchContractsCount(network, fromTime, toTime) {
 // Update Google Sheet using the Sheets API
 async function updateGoogleSheet(rowData) {
     try {
-        // Path to your service account credentials JSON file
-        const keyFile = path.resolve(__dirname, "credentials.json");
-        // const auth = new google.auth.GoogleAuth({
-        //   keyFile,
-        //   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-        // });
-        // const client = await auth.getClient();
-        // const sheets = google.sheets({ version: "v4", auth: client });
+        // Load credentials from the environment variable
+        const credentialsString = process.env.GOOGLE_CREDENTIALS;
+        if (!credentialsString) {
+            throw new Error("GOOGLE_CREDENTIALS not found in environment variables.");
+        }
+        const credentials = JSON.parse(credentialsString);
+        // Initialize GoogleAuth with the credentials
         const auth = new google.auth.GoogleAuth({
-            keyFile,
+            credentials,
             scopes: ["https://www.googleapis.com/auth/spreadsheets"],
         });
         const sheets = google.sheets({ version: "v4", auth });

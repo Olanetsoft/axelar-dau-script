@@ -1,10 +1,12 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import axios from "axios";
-import ExcelJS from "exceljs";
-import fs from "fs";
-import path from "path";
 import chalk from "chalk";
 import logSymbols from "log-symbols";
+import { google } from "googleapis";
 import { fileURLToPath } from "url";
+import path from "path";
 
 // Define __filename and __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -96,7 +98,44 @@ async function fetchContractsCount(
   }
 }
 
-// Main process: update Excel sheet
+// Update Google Sheet using the Sheets API
+async function updateGoogleSheet(rowData: any[]) {
+  try {
+    // Load credentials from the environment variable
+    const credentialsString = process.env.GOOGLE_CREDENTIALS;
+    if (!credentialsString) {
+      throw new Error("GOOGLE_CREDENTIALS not found in environment variables.");
+    }
+    const credentials = JSON.parse(credentialsString);
+
+    // Initialize GoogleAuth with the credentials
+    const auth = new google.auth.GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    const sheets = google.sheets({ version: "v4", auth });
+
+    // Replace with your actual spreadsheet ID
+    const spreadsheetId = "1g0K4b47ws9qE5noroWc5LrbX-L1V9xyKW-ukbOmCSEE";
+
+    // Append the row to the first sheet ("Sheet1")
+    const result = await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: "Sheet1",
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [rowData],
+      },
+    });
+    logSuccess("Google Sheet updated successfully.");
+    console.log(result.data);
+  } catch (error) {
+    logError(`Error updating Google Sheet: ${error}`);
+  }
+}
+
+// Main process: fetch data and update Google Sheet
 async function main() {
   try {
     logStatus("Starting main process...");
@@ -130,33 +169,11 @@ async function main() {
       fetchContractsCount("testnet", fromAllTime, now),
     ]);
 
-    logStatus("Preparing Excel workbook...");
-    const workbook = new ExcelJS.Workbook();
-    const fileName = path.resolve(__dirname, "contracts.xlsx");
-    let worksheet: ExcelJS.Worksheet;
-
-    if (fs.existsSync(fileName)) {
-      logStatus("Excel file exists. Loading workbook...");
-      await workbook.xlsx.readFile(fileName);
-      worksheet =
-        workbook.getWorksheet("Sheet1") || workbook.addWorksheet("Sheet1");
-    } else {
-      logStatus("Excel file not found. Creating new workbook...");
-      worksheet = workbook.addWorksheet("Sheet1");
-      worksheet.addRow([
-        "Date",
-        "Mainnet 28 DAU",
-        "Mainnet Quarter",
-        "Mainnet All Time",
-        "Testnet 28 DAU",
-        "Testnet Quarter",
-        "Testnet All Time",
-      ]);
-    }
-
     const currentDate = new Date().toLocaleString();
-    logStatus(`Appending new data row for date: ${currentDate}`);
-    worksheet.addRow([
+    logStatus(`Preparing row data for date: ${currentDate}`);
+
+    // Create row data array
+    const rowData = [
       currentDate,
       mainnet28,
       mainnetQuarter,
@@ -164,10 +181,10 @@ async function main() {
       testnet28,
       testnetQuarter,
       testnetAllTimeCount,
-    ]);
+    ];
 
-    await workbook.xlsx.writeFile(fileName);
-    logSuccess(`Excel sheet updated successfully and saved to ${fileName}.`);
+    // Update the Google Sheet with the new row data
+    await updateGoogleSheet(rowData);
     logStatus("Process complete. Exiting.");
   } catch (err) {
     logError(`An error occurred in the main process: ${err}`);

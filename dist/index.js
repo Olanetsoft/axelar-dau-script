@@ -6,10 +6,14 @@ import logSymbols from "log-symbols";
 import { google } from "googleapis";
 import { fileURLToPath } from "url";
 import path from "path";
-// Define __filename and __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// Enhanced logging functions using chalk and log-symbols
+// Constants
+const MAINNET_API_URL = "https://api.axelarscan.io/gmp/GMPStats";
+const TESTNET_API_URL = "https://testnet.api.axelarscan.io/gmp/GMPStats";
+const SECONDS_IN_DAY = 86400;
+const EARLIEST_TIME = 1609459200; // Jan 1, 2021 as a safe starting point
+// Enhanced logging functions
 function logStatus(message) {
     console.log(`${logSymbols.info} ${chalk.cyan(message)}`);
 }
@@ -22,10 +26,6 @@ function logWarning(message) {
 function logError(message) {
     console.error(`${logSymbols.error} ${chalk.red(message)}`);
 }
-// API URLs
-const MAINNET_API_URL = "https://api.axelarscan.io/gmp/GMPStats";
-const TESTNET_API_URL = "https://testnet.api.axelarscan.io/gmp/GMPStats";
-// Fetch contracts count from API
 async function fetchContractsCount(network, fromTime, toTime) {
     try {
         const apiUrl = network === "mainnet"
@@ -36,15 +36,13 @@ async function fetchContractsCount(network, fromTime, toTime) {
                     throw new Error(`Unsupported network: ${network}`);
                 })();
         logStatus(`Initiating API call for ${network.toUpperCase()} using URL: ${apiUrl}`);
-        logStatus(`Time range: ${fromTime} to ${toTime} (Unix timestamps)`);
-        // Send only fromTime and toTime as per UI sample
+        logStatus(`Time range: ${new Date(fromTime * 1000).toLocaleString()} to ${new Date(toTime * 1000).toLocaleString()}`);
         const response = await axios.post(apiUrl, { fromTime, toTime });
         const messages = response.data.messages;
         if (!Array.isArray(messages)) {
             logWarning(`No messages array in API response for ${network}.`);
             return 0;
         }
-        logStatus(`API returned ${messages.length} messages for ${network}.`);
         const contractsSet = new Set();
         messages.forEach((message) => {
             if (Array.isArray(message.source_chains)) {
@@ -72,7 +70,6 @@ async function fetchContractsCount(network, fromTime, toTime) {
                 });
             }
         });
-        logStatus(`Processed API response for ${network}: Found ${contractsSet.size} unique contract(s).`);
         return contractsSet.size;
     }
     catch (error) {
@@ -80,83 +77,71 @@ async function fetchContractsCount(network, fromTime, toTime) {
         return 0;
     }
 }
-// Update Google Sheet using the Sheets API
 async function updateGoogleSheet(rowData) {
     try {
-        // Load credentials from the environment variable
         const credentialsString = process.env.GOOGLE_CREDENTIALS;
         if (!credentialsString) {
             throw new Error("GOOGLE_CREDENTIALS not found in environment variables.");
         }
         const credentials = JSON.parse(credentialsString);
-        // Initialize GoogleAuth with the credentials
         const auth = new google.auth.GoogleAuth({
             credentials,
             scopes: ["https://www.googleapis.com/auth/spreadsheets"],
         });
         const sheets = google.sheets({ version: "v4", auth });
-        // Replace with your actual spreadsheet ID
         const spreadsheetId = "1g0K4b47ws9qE5noroWc5LrbX-L1V9xyKW-ukbOmCSEE";
-        // Append the row to the first sheet ("Sheet1")
-        const result = await sheets.spreadsheets.values.append({
+        await sheets.spreadsheets.values.append({
             spreadsheetId,
             range: "Sheet1",
             valueInputOption: "USER_ENTERED",
             insertDataOption: "INSERT_ROWS",
-            requestBody: {
-                values: [rowData],
-            },
+            requestBody: { values: [rowData] },
         });
-        logSuccess("Google Sheet updated successfully.");
-        console.log(result.data);
+        logSuccess(`Saved data for ${rowData[0]}`);
     }
     catch (error) {
         logError(`Error updating Google Sheet: ${error}`);
+        throw error;
     }
 }
-// Main process: fetch data and update Google Sheet
 async function main() {
     try {
-        logStatus("Starting main process...");
-        // For "all time" records, set fromTime to 0 (Unix epoch)
-        const fromAllTime = 0;
-        logStatus(`All time query set from Unix epoch (fromTime: ${fromAllTime})`);
-        // Current time as the end of our query period
-        const now = Math.floor(Date.now() / 1000);
-        const secondsInDay = 86400;
-        const from28Days = now - 28 * secondsInDay;
-        const fromQuarter = now - 90 * secondsInDay;
-        logStatus("Calculated time periods:");
-        logStatus(` - Last 28 days: ${from28Days} to ${now}`);
-        logStatus(` - Last 90 days (Quarter): ${fromQuarter} to ${now}`);
-        logStatus(` - All time: ${fromAllTime} to ${now}`);
+        logStatus("Starting daily data collection...");
+        // Set the exact time to 00:03:04 for consistency with historical data
+        const now = new Date();
+        now.setHours(0, 3, 4, 0);
+        const exactTimestamp = Math.floor(now.getTime() / 1000);
+        // Calculate time ranges
+        const from28Days = exactTimestamp - 28 * SECONDS_IN_DAY;
+        // Start quarter from beginning of calendar quarter
+        const quarterStart = new Date(now);
+        quarterStart.setMonth(Math.floor(quarterStart.getMonth() / 3) * 3);
+        quarterStart.setDate(1);
+        quarterStart.setHours(0, 3, 4, 0);
+        const fromQuarter = Math.floor(quarterStart.getTime() / 1000);
         logStatus("Fetching counts for MAINNET...");
-        const [mainnet28, mainnetQuarter, mainnetAllTimeCount] = await Promise.all([
-            fetchContractsCount("mainnet", from28Days, now),
-            fetchContractsCount("mainnet", fromQuarter, now),
-            fetchContractsCount("mainnet", fromAllTime, now),
+        const [mainnet28, mainnetQuarter, mainnetAllTime] = await Promise.all([
+            fetchContractsCount("mainnet", from28Days, exactTimestamp),
+            fetchContractsCount("mainnet", fromQuarter, exactTimestamp),
+            fetchContractsCount("mainnet", EARLIEST_TIME, exactTimestamp),
         ]);
         logStatus("Fetching counts for TESTNET...");
-        const [testnet28, testnetQuarter, testnetAllTimeCount] = await Promise.all([
-            fetchContractsCount("testnet", from28Days, now),
-            fetchContractsCount("testnet", fromQuarter, now),
-            fetchContractsCount("testnet", fromAllTime, now),
+        const [testnet28, testnetQuarter, testnetAllTime] = await Promise.all([
+            fetchContractsCount("testnet", from28Days, exactTimestamp),
+            fetchContractsCount("testnet", fromQuarter, exactTimestamp),
+            fetchContractsCount("testnet", EARLIEST_TIME, exactTimestamp),
         ]);
-        const currentDate = new Date().toLocaleString();
-        logStatus(`Preparing row data for date: ${currentDate}`);
-        // Create row data array
         const rowData = [
-            currentDate,
+            now.toLocaleString(),
             mainnet28,
             mainnetQuarter,
-            mainnetAllTimeCount,
+            mainnetAllTime,
             testnet28,
             testnetQuarter,
-            testnetAllTimeCount,
+            testnetAllTime,
         ];
-        // Update the Google Sheet with the new row data
         await updateGoogleSheet(rowData);
-        logStatus("Process complete. Exiting.");
+        logSuccess("Daily data collection complete");
     }
     catch (err) {
         logError(`An error occurred in the main process: ${err}`);
